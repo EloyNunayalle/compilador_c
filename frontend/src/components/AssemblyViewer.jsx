@@ -19,7 +19,7 @@ export default function AssemblyViewer({ assembly, loading = false }) {
         fontWeight: '500',
         color: '#cccccc',
       }}>
-        output.s (x86-64 AT&T Assembly)
+        output.s (x86-64)
       </div>
 
       <div style={{
