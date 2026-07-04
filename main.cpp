@@ -5,7 +5,7 @@
 //   1. Leer archivo fuente (.c)
 //   2. Scanner  → tokens
 //   3. Parser   → AST
-//   4. Optimizer → plegado de constantes y simplificaciones (-O1 por defecto)
+//   4. InlineVisitor → FoldVisitor → SethiVisitor (-O1 por defecto)
 //   5. TypeChecker (análisis semántico + verificación de tipos)
 //   6. GenCode  → x86-64 AT&T en <archivo>.s
 //
@@ -64,12 +64,18 @@ int main(int argc, char *argv[]) {
 
   // ---- Optimización sobre el AST (antes del análisis semántico) ----
   if (optimize) {
-    Optimizer opt;
-    opt.run(program);
-    std::cout << "Optimizacion -O1: " << opt.foldCount
-              << " plegados de constantes, " << opt.algebraCount
-              << " identidades algebraicas, " << opt.strengthCount
+    InlineVisitor inl;
+    inl.Inline(program);
+
+    FoldVisitor fold;
+    fold.Fold(program);
+    std::cout << "Optimizacion -O1: " << fold.foldCount
+              << " plegados de constantes, " << fold.algebraCount
+              << " identidades algebraicas, " << fold.strengthCount
               << " reducciones de fuerza.\n";
+
+    SethiVisitor sethi;
+    sethi.Sethi(program);
   }
 
   // ---- Semántico ----

@@ -53,8 +53,14 @@ int main(int argc, char *argv[]) {
 
     // ---- Optimización sobre el AST (opcional) ----
     if (optimize) {
-      Optimizer opt;
-      opt.run(program);
+      InlineVisitor inl;
+      inl.Inline(program);
+
+      FoldVisitor fold;
+      fold.Fold(program);
+
+      SethiVisitor sethi;
+      sethi.Sethi(program);
     }
 
     // ---- Semántico ----

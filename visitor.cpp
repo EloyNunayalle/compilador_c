@@ -1,4 +1,5 @@
 #include "visitor.h"
+#include <algorithm>
 #include <iostream>
 #include <stdexcept>
 
@@ -413,7 +414,7 @@ int GenCodeVisitor::visit(Program *p) {
         out << vi.name << ": .zero " << structSizeOf(vi.type) << "\n";
       } else if (vi.type.isFloating()) {
         double dv = 0.0;
-        if (auto fl = dynamic_cast<FloatLit *>(vi.init)) dv = fl->value;
+        if (auto fl = vi.init->asFloatLit()) dv = fl->value;
         else if (vi.init && vi.init->isConstant) dv = (double)vi.init->constantValue;
         unsigned long long bits;
         __builtin_memcpy(&bits, &dv, 8);
@@ -467,20 +468,20 @@ void GenCodeVisitor::assignLocal(const VarInit &vi) {
 // Asigna offsets a locales recorriendo el cuerpo (incluye bloques anidados).
 void GenCodeVisitor::collectLocals(Block *b) {
   for (Stm *s : b->stms) {
-    if (auto vd = dynamic_cast<VarDecStm *>(s)) {
+    if (auto vd = s->asVarDecStm()) {
       for (auto &vi : vd->vars) assignLocal(vi);
-    } else if (auto ifs = dynamic_cast<IfStm *>(s)) {
+    } else if (auto ifs = s->asIfStm()) {
       collectLocals(ifs->thenB);
       if (ifs->elseB) collectLocals(ifs->elseB);
-    } else if (auto ws = dynamic_cast<WhileStm *>(s)) {
+    } else if (auto ws = s->asWhileStm()) {
       collectLocals(ws->body);
-    } else if (auto dw = dynamic_cast<DoWhileStm *>(s)) {
+    } else if (auto dw = s->asDoWhileStm()) {
       collectLocals(dw->body);
-    } else if (auto fs = dynamic_cast<ForStm *>(s)) {
-      if (auto vd = dynamic_cast<VarDecStm *>(fs->init))
+    } else if (auto fs = s->asForStm()) {
+      if (auto vd = fs->init->asVarDecStm())
         for (auto &vi : vd->vars) assignLocal(vi);
       collectLocals(fs->body);
-    } else if (auto blk = dynamic_cast<Block *>(s)) {
+    } else if (auto blk = s->asBlock()) {
       collectLocals(blk);
     }
   }
@@ -564,7 +565,7 @@ int GenCodeVisitor::visit(VarDecStm *s) {
 
 // Deja la DIRECCIÓN del lvalue en %rax
 void GenCodeVisitor::genAddress(Exp *lvalue) {
-  if (auto id = dynamic_cast<IdExp *>(lvalue)) {
+  if (auto id = lvalue->asId()) {
     if (memoria.count(id->name))
       out << "\tleaq " << memoria[id->name] << "(%rbp), %rax\n";
     else if (globals.count(id->name))
@@ -574,12 +575,12 @@ void GenCodeVisitor::genAddress(Exp *lvalue) {
     return;
   }
   // *p  =>  la dirección es el valor de p
-  if (auto de = dynamic_cast<DerefExp *>(lvalue)) {
+  if (auto de = lvalue->asDeref()) {
     de->operand->accept(this); // valor del puntero en %rax
     return;
   }
   // base[index]  =>  dir = base + index*elemSize
-  if (auto ix = dynamic_cast<IndexExp *>(lvalue)) {
+  if (auto ix = lvalue->asIndex()) {
     ix->base->accept(this);            // base (dirección/puntero) en %rax
     out << "\tpushq %rax\n";
     ix->index->accept(this);           // índice en %rax
@@ -591,7 +592,7 @@ void GenCodeVisitor::genAddress(Exp *lvalue) {
     return;
   }
   // obj.field  |  ptr->field
-  if (auto fe = dynamic_cast<FieldExp *>(lvalue)) {
+  if (auto fe = lvalue->asField()) {
     std::string sname;
     if (fe->arrow) {
       fe->obj->accept(this);           // valor del puntero en %rax
@@ -972,12 +973,21 @@ int GenCodeVisitor::visit(BinaryExp *e) {
     return 0;
   }
 
-  // evalúa left, apila; evalúa right; opera
-  e->left->accept(this);
-  out << "\tpushq %rax\n";
-  e->right->accept(this);
-  out << "\tmovq %rax, %rcx\n"; // right en rcx
-  out << "\tpopq %rax\n";       // left en rax
+  // ---- Enteros (default) ----
+  // Orden Sethi-Ullmann: evaluar primero el subárbol con label mayor
+  if (e->left->label >= e->right->label) {
+    e->left->accept(this);
+    out << "\tpushq %rax\n";
+    e->right->accept(this);
+    out << "\tmovq %rax, %rcx\n";
+    out << "\tpopq %rax\n";
+  } else {
+    e->right->accept(this);
+    out << "\tpushq %rax\n";
+    e->left->accept(this);
+    out << "\tmovq %rax, %rcx\n";
+    out << "\tpopq %rax\n";
+  }
 
   switch (e->op) {
   case PLUS_OP: out << "\taddq %rcx, %rax\n"; break;
@@ -1127,25 +1137,156 @@ int GenCodeVisitor::visit(CallExp *e) {
 }
 
 // =============================================================================
-// Optimizer — plegado de constantes + identidades algebraicas
+// InlineVisitor — inline de funciones pequeñas
 // =============================================================================
 
-static bool asIntConst(Exp *e, long &v) {
-  if (auto n = dynamic_cast<IntLit *>(e)) { v = n->value; return true; }
+bool InlineVisitor::isInlineable(FunDef *fd) {
+  if (!fd || !fd->body) return false;
+  // Debe tener exactamente una sentencia (un return)
+  if (fd->body->stms.size() != 1) return false;
+  ReturnStm *ret = fd->body->stms[0]->asReturn();
+  if (!ret || !ret->e) return false;
+  return true;
+}
+
+Exp *InlineVisitor::cloneReturn(FunDef *fd) {
+  for (auto s : fd->body->stms) {
+    if (auto r = s->asReturn())
+      return r->e ? r->e->clone() : nullptr;
+  }
+  return nullptr;
+}
+
+void InlineVisitor::substituteParameters(Exp *&exp, FunDef *fd, CallExp *call) {
+  if (!exp) return;
+  if (auto bin = exp->asBinary()) {
+    substituteParameters(bin->left, fd, call);
+    substituteParameters(bin->right, fd, call);
+    return;
+  }
+  if (auto un = exp->asUnary()) {
+    substituteParameters(un->operand, fd, call);
+    return;
+  }
+  if (auto id = exp->asId()) {
+    for (size_t i = 0; i < fd->params.size(); i++) {
+      if (id->name == fd->params[i].name) {
+        delete exp;
+        exp = call->args[i]->clone();
+        return;
+      }
+    }
+  }
+}
+
+void InlineVisitor::inlineExp(Exp *&exp) {
+  if (!exp) return;
+  if (auto bin = exp->asBinary()) {
+    inlineExp(bin->left);
+    inlineExp(bin->right);
+    return;
+  }
+  if (auto un = exp->asUnary()) {
+    inlineExp(un->operand);
+    return;
+  }
+  auto fc = exp->asCall();
+  if (!fc) return;
+  for (auto &arg : fc->args) inlineExp(arg);
+  auto it = inlineFunctions.find(fc->name);
+  if (it == inlineFunctions.end()) return;
+  Exp *newTree = cloneReturn(it->second);
+  if (!newTree) return;
+  substituteParameters(newTree, it->second, fc);
+  inlineExp(newTree);
+  delete exp;
+  exp = newTree;
+}
+
+int InlineVisitor::Inline(Program *program) {
+  inlineFunctions.clear();
+  for (auto fd : program->functions) {
+    if (isInlineable(fd) && fd->name != "main") {
+      inlineFunctions[fd->name] = fd;
+      fd->isInlined = true;
+    }
+  }
+  program->accept(this);
+  return 0;
+}
+
+int InlineVisitor::visit(IntLit *) { return 0; }
+int InlineVisitor::visit(FloatLit *) { return 0; }
+int InlineVisitor::visit(StringLit *) { return 0; }
+int InlineVisitor::visit(CastExp *e) { inlineExp(e->operand); return 0; }
+int InlineVisitor::visit(IdExp *) { return 0; }
+int InlineVisitor::visit(UnaryExp *e) { inlineExp(e->operand); return 0; }
+int InlineVisitor::visit(BinaryExp *e) { inlineExp(e->left); inlineExp(e->right); return 0; }
+int InlineVisitor::visit(CallExp *) { return 0; }
+int InlineVisitor::visit(AddrExp *e) { inlineExp(e->operand); return 0; }
+int InlineVisitor::visit(DerefExp *e) { inlineExp(e->operand); return 0; }
+int InlineVisitor::visit(IndexExp *e) { inlineExp(e->base); inlineExp(e->index); return 0; }
+int InlineVisitor::visit(FieldExp *e) { inlineExp(e->obj); return 0; }
+int InlineVisitor::visit(SizeofExp *) { return 0; }
+int InlineVisitor::visit(VarDecStm *) { return 0; }
+int InlineVisitor::visit(AssignStm *s) { inlineExp(s->target); inlineExp(s->value); return 0; }
+int InlineVisitor::visit(ExprStm *s) { inlineExp(s->e); return 0; }
+int InlineVisitor::visit(ReturnStm *s) { if (s->e) inlineExp(s->e); return 0; }
+int InlineVisitor::visit(IfStm *s) {
+  inlineExp(s->cond);
+  if (s->thenB) s->thenB->accept(this);
+  if (s->elseB) s->elseB->accept(this);
+  return 0;
+}
+int InlineVisitor::visit(WhileStm *s) {
+  inlineExp(s->cond);
+  if (s->body) s->body->accept(this);
+  return 0;
+}
+int InlineVisitor::visit(DoWhileStm *s) {
+  if (s->body) s->body->accept(this);
+  inlineExp(s->cond);
+  return 0;
+}
+int InlineVisitor::visit(ForStm *s) {
+  if (s->init) s->init->accept(this);
+  if (s->cond) inlineExp(s->cond);
+  if (s->update) s->update->accept(this);
+  if (s->body) s->body->accept(this);
+  return 0;
+}
+int InlineVisitor::visit(BreakStm *) { return 0; }
+int InlineVisitor::visit(ContinueStm *) { return 0; }
+int InlineVisitor::visit(Block *b) { for (auto s : b->stms) s->accept(this); return 0; }
+int InlineVisitor::visit(FunDef *f) { if (f->body) f->body->accept(this); return 0; }
+int InlineVisitor::visit(Program *p) {
+  for (auto f : p->functions) if (!f->isInlined) f->accept(this);
+  return 0;
+}
+
+// =============================================================================
+// FoldVisitor — plegado de constantes + algebraicas + reducción de fuerza
+// =============================================================================
+
+static bool isIntConst(Exp *e, long &v) {
+  IntLit *n = e->asIntLit();
+  if (n) { v = n->value; return true; }
   return false;
 }
 
-void Optimizer::fold(Exp *&e) {
+static void foldExp(Exp *&e, int &foldCount, int &algebraCount, int &strengthCount) {
   if (!e) return;
 
-  if (auto be = dynamic_cast<BinaryExp *>(e)) {
-    fold(be->left);
-    fold(be->right);
+  // BinaryExp
+  BinaryExp *be = e->asBinary();
+  if (be) {
+    foldExp(be->left, foldCount, algebraCount, strengthCount);
+    foldExp(be->right, foldCount, algebraCount, strengthCount);
     long lv, rv;
-    bool lc = asIntConst(be->left, lv);
-    bool rc = asIntConst(be->right, rv);
+    bool lc = isIntConst(be->left, lv);
+    bool rc = isIntConst(be->right, rv);
 
-    // (1) Plegado de constantes: ambos operandos enteros literales
+    // (1) Constant folding
     if (lc && rc) {
       long r = 0; bool ok = true;
       switch (be->op) {
@@ -1167,7 +1308,7 @@ void Optimizer::fold(Exp *&e) {
       if (ok) { delete e; e = new IntLit(r); foldCount++; return; }
     }
 
-    // (2) Identidades algebraicas (un operando constante)
+    // (2) Algebraic identities
     if (rc && (be->op == PLUS_OP || be->op == MINUS_OP) && rv == 0) {
       Exp *keep = be->left; be->left = nullptr; delete be; e = keep; algebraCount++; return;
     }
@@ -1183,16 +1324,27 @@ void Optimizer::fold(Exp *&e) {
     if (rc && be->op == DIV_OP && rv == 1) {
       Exp *keep = be->left; be->left = nullptr; delete be; e = keep; algebraCount++; return;
     }
+    // x*0 -> 0, 0*x -> 0
+    if (rc && be->op == MUL_OP && rv == 0) {
+      delete be->left; delete be->right; be->left = be->right = nullptr;
+      delete e; e = new IntLit(0); algebraCount++; return;
+    }
+    if (lc && be->op == MUL_OP && lv == 0) {
+      delete be->left; delete be->right; be->left = be->right = nullptr;
+      delete e; e = new IntLit(0); algebraCount++; return;
+    }
 
-    // (3) Reducción de fuerza: var*2 -> var+var (var sin efectos secundarios)
+    // (3) Strength reduction: x*2 -> x+x
     if (be->op == MUL_OP && rc && rv == 2) {
-      if (auto id = dynamic_cast<IdExp *>(be->left)) {
+      IdExp *id = be->left->asId();
+      if (id) {
         Exp *a = new IdExp(id->name), *b = new IdExp(id->name);
         delete e; e = new BinaryExp(a, PLUS_OP, b); strengthCount++; return;
       }
     }
     if (be->op == MUL_OP && lc && lv == 2) {
-      if (auto id = dynamic_cast<IdExp *>(be->right)) {
+      IdExp *id = be->right->asId();
+      if (id) {
         Exp *a = new IdExp(id->name), *b = new IdExp(id->name);
         delete e; e = new BinaryExp(a, PLUS_OP, b); strengthCount++; return;
       }
@@ -1200,58 +1352,163 @@ void Optimizer::fold(Exp *&e) {
     return;
   }
 
-  if (auto ue = dynamic_cast<UnaryExp *>(e)) {
-    fold(ue->operand);
+  // UnaryExp
+  UnaryExp *ue = e->asUnary();
+  if (ue) {
+    foldExp(ue->operand, foldCount, algebraCount, strengthCount);
     long v;
-    if (asIntConst(ue->operand, v)) {
+    if (isIntConst(ue->operand, v)) {
       long r = (ue->op == NEG_OP) ? -v : !v;
       delete e; e = new IntLit(r); foldCount++; return;
     }
     return;
   }
-  if (auto ce = dynamic_cast<CastExp *>(e)) { fold(ce->operand); return; }
-  if (auto ae = dynamic_cast<AddrExp *>(e)) { fold(ae->operand); return; }
-  if (auto de = dynamic_cast<DerefExp *>(e)) { fold(de->operand); return; }
-  if (auto ix = dynamic_cast<IndexExp *>(e)) { fold(ix->base); fold(ix->index); return; }
-  if (auto fe = dynamic_cast<FieldExp *>(e)) { fold(fe->obj); return; }
-  if (auto call = dynamic_cast<CallExp *>(e)) {
-    for (auto &a : call->args) fold(a);
+
+  // Other expression types — just recurse into children
+  if (auto ce = e->asCast()) { foldExp(ce->operand, foldCount, algebraCount, strengthCount); return; }
+  if (auto ae = e->asAddr()) { foldExp(ae->operand, foldCount, algebraCount, strengthCount); return; }
+  if (auto de = e->asDeref()) { foldExp(de->operand, foldCount, algebraCount, strengthCount); return; }
+  if (auto ix = e->asIndex()) { foldExp(ix->base, foldCount, algebraCount, strengthCount); foldExp(ix->index, foldCount, algebraCount, strengthCount); return; }
+  if (auto fe = e->asField()) { foldExp(fe->obj, foldCount, algebraCount, strengthCount); return; }
+  if (auto call = e->asCall()) {
+    for (auto &a : call->args) foldExp(a, foldCount, algebraCount, strengthCount);
     return;
   }
 }
 
-void Optimizer::optBlock(Block *b) {
-  for (Stm *s : b->stms) optStm(s);
-}
-
-void Optimizer::optStm(Stm *s) {
-  if (auto vd = dynamic_cast<VarDecStm *>(s)) {
-    for (auto &vi : vd->vars) if (vi.init) fold(vi.init);
-  } else if (auto as = dynamic_cast<AssignStm *>(s)) {
-    fold(as->target); fold(as->value);
-  } else if (auto es = dynamic_cast<ExprStm *>(s)) {
-    fold(es->e);
-  } else if (auto rs = dynamic_cast<ReturnStm *>(s)) {
-    if (rs->e) fold(rs->e);
-  } else if (auto is = dynamic_cast<IfStm *>(s)) {
-    fold(is->cond); optBlock(is->thenB); if (is->elseB) optBlock(is->elseB);
-  } else if (auto ws = dynamic_cast<WhileStm *>(s)) {
-    fold(ws->cond); optBlock(ws->body);
-  } else if (auto dw = dynamic_cast<DoWhileStm *>(s)) {
-    optBlock(dw->body); fold(dw->cond);
-  } else if (auto fs = dynamic_cast<ForStm *>(s)) {
-    if (fs->init) optStm(fs->init);
-    if (fs->cond) fold(fs->cond);
-    if (fs->update) optStm(fs->update);
-    optBlock(fs->body);
-  } else if (auto blk = dynamic_cast<Block *>(s)) {
-    optBlock(blk);
-  }
-}
-
-void Optimizer::run(Program *p) {
+int FoldVisitor::Fold(Program *p) {
   for (auto g : p->globals)
-    for (auto &vi : g->vars) if (vi.init) fold(vi.init);
-  for (auto f : p->functions)
-    if (f->body) optBlock(f->body);
+    for (auto &vi : g->vars)
+      if (vi.init) foldExp(vi.init, foldCount, algebraCount, strengthCount);
+  p->accept(this);
+  return 0;
+}
+
+int FoldVisitor::visit(IntLit *) { return 0; }
+int FoldVisitor::visit(FloatLit *) { return 0; }
+int FoldVisitor::visit(StringLit *) { return 0; }
+int FoldVisitor::visit(CastExp *) { return 0; }
+int FoldVisitor::visit(IdExp *) { return 0; }
+int FoldVisitor::visit(UnaryExp *) { return 0; }
+int FoldVisitor::visit(BinaryExp *) { return 0; }
+int FoldVisitor::visit(CallExp *) { return 0; }
+int FoldVisitor::visit(AddrExp *) { return 0; }
+int FoldVisitor::visit(DerefExp *) { return 0; }
+int FoldVisitor::visit(IndexExp *) { return 0; }
+int FoldVisitor::visit(FieldExp *) { return 0; }
+int FoldVisitor::visit(SizeofExp *) { return 0; }
+int FoldVisitor::visit(VarDecStm *s) {
+  for (auto &vi : s->vars) if (vi.init) foldExp(vi.init, foldCount, algebraCount, strengthCount);
+  return 0;
+}
+int FoldVisitor::visit(AssignStm *s) { foldExp(s->target, foldCount, algebraCount, strengthCount); foldExp(s->value, foldCount, algebraCount, strengthCount); return 0; }
+int FoldVisitor::visit(ExprStm *s) { foldExp(s->e, foldCount, algebraCount, strengthCount); return 0; }
+int FoldVisitor::visit(ReturnStm *s) { if (s->e) foldExp(s->e, foldCount, algebraCount, strengthCount); return 0; }
+int FoldVisitor::visit(IfStm *s) {
+  foldExp(s->cond, foldCount, algebraCount, strengthCount);
+  if (s->thenB) s->thenB->accept(this);
+  if (s->elseB) s->elseB->accept(this);
+  return 0;
+}
+int FoldVisitor::visit(WhileStm *s) {
+  foldExp(s->cond, foldCount, algebraCount, strengthCount);
+  if (s->body) s->body->accept(this);
+  return 0;
+}
+int FoldVisitor::visit(DoWhileStm *s) {
+  if (s->body) s->body->accept(this);
+  foldExp(s->cond, foldCount, algebraCount, strengthCount);
+  return 0;
+}
+int FoldVisitor::visit(ForStm *s) {
+  if (s->init) s->init->accept(this);
+  if (s->cond) foldExp(s->cond, foldCount, algebraCount, strengthCount);
+  if (s->update) s->update->accept(this);
+  if (s->body) s->body->accept(this);
+  return 0;
+}
+int FoldVisitor::visit(BreakStm *) { return 0; }
+int FoldVisitor::visit(ContinueStm *) { return 0; }
+int FoldVisitor::visit(Block *b) { for (auto s : b->stms) s->accept(this); return 0; }
+int FoldVisitor::visit(FunDef *f) { if (f->body) f->body->accept(this); return 0; }
+
+int FoldVisitor::visit(Program *p) {
+  for (auto f : p->functions) if (!f->isInlined) f->accept(this);
+  return 0;
+}
+
+// =============================================================================
+// SethiVisitor — etiquetado Sethi-Ullman
+// =============================================================================
+
+int SethiVisitor::Sethi(Program *p) {
+  p->accept(this);
+  return 0;
+}
+
+int SethiVisitor::visit(IntLit *e) { e->ishoja = true; e->label = 1; return 0; }
+int SethiVisitor::visit(FloatLit *e) { e->ishoja = true; e->label = 1; return 0; }
+int SethiVisitor::visit(StringLit *e) { e->label = 1; return 0; }
+int SethiVisitor::visit(IdExp *e) { e->ishoja = true; e->label = 1; return 0; }
+int SethiVisitor::visit(UnaryExp *e) { e->operand->accept(this); e->label = e->operand->label; return 0; }
+int SethiVisitor::visit(BinaryExp *e) {
+  e->left->accept(this);
+  e->right->accept(this);
+  if (e->left->label == e->right->label)
+    e->label = e->left->label + 1;
+  else
+    e->label = std::max(e->left->label, e->right->label);
+  return 0;
+}
+int SethiVisitor::visit(CallExp *e) {
+  int mx = 0;
+  for (auto a : e->args) { a->accept(this); if (a->label > mx) mx = a->label; }
+  e->label = mx;
+  return 0;
+}
+int SethiVisitor::visit(CastExp *e) { e->operand->accept(this); e->label = e->operand->label; return 0; }
+int SethiVisitor::visit(AddrExp *e) { e->operand->accept(this); e->label = e->operand->label; return 0; }
+int SethiVisitor::visit(DerefExp *e) { e->operand->accept(this); e->label = e->operand->label; return 0; }
+int SethiVisitor::visit(IndexExp *e) {
+  e->base->accept(this);
+  e->index->accept(this);
+  e->label = std::max(e->base->label, e->index->label);
+  return 0;
+}
+int SethiVisitor::visit(FieldExp *e) { e->obj->accept(this); e->label = e->obj->label; return 0; }
+int SethiVisitor::visit(SizeofExp *) { return 0; }
+int SethiVisitor::visit(VarDecStm *) { return 0; }
+int SethiVisitor::visit(AssignStm *s) { s->target->accept(this); s->value->accept(this); return 0; }
+int SethiVisitor::visit(ExprStm *s) { s->e->accept(this); return 0; }
+int SethiVisitor::visit(ReturnStm *s) { if (s->e) s->e->accept(this); return 0; }
+int SethiVisitor::visit(IfStm *s) {
+  s->cond->accept(this);
+  if (s->thenB) s->thenB->accept(this);
+  if (s->elseB) s->elseB->accept(this);
+  return 0;
+}
+int SethiVisitor::visit(WhileStm *s) {
+  s->cond->accept(this);
+  if (s->body) s->body->accept(this);
+  return 0;
+}
+int SethiVisitor::visit(DoWhileStm *s) {
+  if (s->body) s->body->accept(this);
+  s->cond->accept(this);
+  return 0;
+}
+int SethiVisitor::visit(ForStm *s) {
+  if (s->init) s->init->accept(this);
+  if (s->cond) s->cond->accept(this);
+  if (s->update) s->update->accept(this);
+  if (s->body) s->body->accept(this);
+  return 0;
+}
+int SethiVisitor::visit(BreakStm *) { return 0; }
+int SethiVisitor::visit(ContinueStm *) { return 0; }
+int SethiVisitor::visit(Block *b) { for (auto s : b->stms) s->accept(this); return 0; }
+int SethiVisitor::visit(FunDef *f) { if (f->body) f->body->accept(this); return 0; }
+int SethiVisitor::visit(Program *p) {
+  for (auto f : p->functions) if (!f->isInlined) f->accept(this);
+  return 0;
 }

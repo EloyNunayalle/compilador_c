@@ -40,6 +40,24 @@
 #include <vector>
 
 class Visitor;
+class BinaryExp;
+class UnaryExp;
+class IntLit;
+class FloatLit;
+class IdExp;
+class CallExp;
+class CastExp;
+class AddrExp;
+class DerefExp;
+class IndexExp;
+class FieldExp;
+class ReturnStm;
+class VarDecStm;
+class IfStm;
+class WhileStm;
+class DoWhileStm;
+class ForStm;
+class Block;
 
 // =============================================================================
 // Sistema de tipos
@@ -158,18 +176,35 @@ public:
   bool isConstant = false;    // usado por el plegado de constantes
   long constantValue = 0;
   int label = 0;              // etiqueta Sethi-Ullman
+  bool ishoja = false;        // usado por Sethi-Ullman
 
   virtual int accept(Visitor *v) = 0;
   virtual bool isLValue() const { return false; }
   virtual ~Exp() {}
   static std::string binopToStr(BinaryOp op);
+
+  // helpers para evitar dynamic_cast
+  virtual BinaryExp *asBinary() { return nullptr; }
+  virtual UnaryExp *asUnary() { return nullptr; }
+  virtual IntLit *asIntLit() { return nullptr; }
+  virtual FloatLit *asFloatLit() { return nullptr; }
+  virtual IdExp *asId() { return nullptr; }
+  virtual CallExp *asCall() { return nullptr; }
+  virtual CastExp *asCast() { return nullptr; }
+  virtual AddrExp *asAddr() { return nullptr; }
+  virtual DerefExp *asDeref() { return nullptr; }
+  virtual IndexExp *asIndex() { return nullptr; }
+  virtual FieldExp *asField() { return nullptr; }
+  virtual Exp *clone() const { return nullptr; }
 };
 
 class IntLit : public Exp {
 public:
   long value;
   IntLit(long v) : value(v) {}
+  IntLit *asIntLit() override { return this; }
   int accept(Visitor *v) override;
+  Exp *clone() const override { return new IntLit(value); }
 };
 
 // ---- Literal de punto flotante (double) ----
@@ -177,7 +212,9 @@ class FloatLit : public Exp {
 public:
   double value;
   FloatLit(double v) : value(v) {}
+  FloatLit *asFloatLit() override { return this; }
   int accept(Visitor *v) override;
+  Exp *clone() const override { return new FloatLit(value); }
 };
 
 class StringLit : public Exp {
@@ -186,6 +223,7 @@ public:
   int labelId = -1;  // índice de etiqueta .LC asignado en codegen
   StringLit(const std::string &v) : value(v) {}
   int accept(Visitor *v) override;
+  Exp *clone() const override { return new StringLit(value); }
 };
 
 class IdExp : public Exp {
@@ -193,7 +231,9 @@ public:
   std::string name;
   IdExp(const std::string &n) : name(n) {}
   bool isLValue() const override { return true; }
+  IdExp *asId() override { return this; }
   int accept(Visitor *v) override;
+  Exp *clone() const override { return new IdExp(name); }
 };
 
 class UnaryExp : public Exp {
@@ -201,7 +241,9 @@ public:
   UnaryOp op;
   Exp *operand;
   UnaryExp(UnaryOp op, Exp *e) : op(op), operand(e) {}
+  UnaryExp *asUnary() override { return this; }
   int accept(Visitor *v) override;
+  Exp *clone() const override { return new UnaryExp(op, operand->clone()); }
   ~UnaryExp() { delete operand; }
 };
 
@@ -211,7 +253,9 @@ public:
   Exp *left;
   Exp *right;
   BinaryExp(Exp *l, BinaryOp op, Exp *r) : op(op), left(l), right(r) {}
+  BinaryExp *asBinary() override { return this; }
   int accept(Visitor *v) override;
+  Exp *clone() const override { return new BinaryExp(left->clone(), op, right->clone()); }
   ~BinaryExp() { delete left; delete right; }
 };
 
@@ -220,7 +264,13 @@ public:
   std::string name;
   std::vector<Exp *> args;
   CallExp(const std::string &n) : name(n) {}
+  CallExp *asCall() override { return this; }
   int accept(Visitor *v) override;
+  Exp *clone() const override {
+    CallExp *c = new CallExp(name);
+    for (auto a : args) c->args.push_back(a->clone());
+    return c;
+  }
   ~CallExp() { for (auto a : args) delete a; }
 };
 
@@ -229,7 +279,9 @@ class AddrExp : public Exp {
 public:
   Exp *operand;
   AddrExp(Exp *e) : operand(e) {}
+  AddrExp *asAddr() override { return this; }
   int accept(Visitor *v) override;
+  Exp *clone() const override { return new AddrExp(operand->clone()); }
   ~AddrExp() { delete operand; }
 };
 
@@ -239,7 +291,9 @@ public:
   Exp *operand;
   DerefExp(Exp *e) : operand(e) {}
   bool isLValue() const override { return true; }
+  DerefExp *asDeref() override { return this; }
   int accept(Visitor *v) override;
+  Exp *clone() const override { return new DerefExp(operand->clone()); }
   ~DerefExp() { delete operand; }
 };
 
@@ -250,7 +304,9 @@ public:
   Exp *index;
   IndexExp(Exp *b, Exp *i) : base(b), index(i) {}
   bool isLValue() const override { return true; }
+  IndexExp *asIndex() override { return this; }
   int accept(Visitor *v) override;
+  Exp *clone() const override { return new IndexExp(base->clone(), index->clone()); }
   ~IndexExp() { delete base; delete index; }
 };
 
@@ -263,7 +319,9 @@ public:
   FieldExp(Exp *o, const std::string &f, bool arrow)
       : obj(o), field(f), arrow(arrow) {}
   bool isLValue() const override { return true; }
+  FieldExp *asField() override { return this; }
   int accept(Visitor *v) override;
+  Exp *clone() const override { return new FieldExp(obj->clone(), field, arrow); }
   ~FieldExp() { delete obj; }
 };
 
@@ -273,7 +331,9 @@ public:
   Type target;
   Exp *operand;
   CastExp(Type t, Exp *e) : target(t), operand(e) {}
+  CastExp *asCast() override { return this; }
   int accept(Visitor *v) override;
+  Exp *clone() const override { return new CastExp(target, operand->clone()); }
   ~CastExp() { delete operand; }
 };
 
@@ -295,10 +355,15 @@ public:
 class Stm {
 public:
   virtual int accept(Visitor *v) = 0;
+  virtual VarDecStm *asVarDecStm() { return nullptr; }
+  virtual ReturnStm *asReturn() { return nullptr; }
+  virtual IfStm *asIfStm() { return nullptr; }
+  virtual WhileStm *asWhileStm() { return nullptr; }
+  virtual DoWhileStm *asDoWhileStm() { return nullptr; }
+  virtual ForStm *asForStm() { return nullptr; }
+  virtual Block *asBlock() { return nullptr; }
   virtual ~Stm() {}
 };
-
-class Block; // fwd
 
 // Una declaración local: tipo + varios (nombre, init opcional)
 struct VarInit {
@@ -312,6 +377,7 @@ class VarDecStm : public Stm {
 public:
   Type type;
   std::vector<VarInit> vars;
+  VarDecStm *asVarDecStm() override { return this; }
   int accept(Visitor *v) override;
   ~VarDecStm() { for (auto &vi : vars) delete vi.init; }
 };
@@ -338,6 +404,7 @@ class ReturnStm : public Stm {
 public:
   Exp *e; // puede ser nullptr (return;)
   ReturnStm(Exp *e) : e(e) {}
+  ReturnStm *asReturn() override { return this; }
   int accept(Visitor *v) override;
   ~ReturnStm() { delete e; }
 };
@@ -348,6 +415,7 @@ public:
   Block *thenB;
   Block *elseB; // puede ser nullptr
   IfStm(Exp *c, Block *t, Block *e) : cond(c), thenB(t), elseB(e) {}
+  IfStm *asIfStm() override { return this; }
   int accept(Visitor *v) override;
   ~IfStm();
 };
@@ -357,6 +425,7 @@ public:
   Exp *cond;
   Block *body;
   WhileStm(Exp *c, Block *b) : cond(c), body(b) {}
+  WhileStm *asWhileStm() override { return this; }
   int accept(Visitor *v) override;
   ~WhileStm();
 };
@@ -366,6 +435,7 @@ public:
   Block *body;
   Exp *cond;
   DoWhileStm(Block *b, Exp *c) : body(b), cond(c) {}
+  DoWhileStm *asDoWhileStm() override { return this; }
   int accept(Visitor *v) override;
   ~DoWhileStm();
 };
@@ -378,6 +448,7 @@ public:
   Block *body;
   ForStm(Stm *i, Exp *c, Stm *u, Block *b)
       : init(i), cond(c), update(u), body(b) {}
+  ForStm *asForStm() override { return this; }
   int accept(Visitor *v) override;
   ~ForStm();
 };
@@ -395,6 +466,7 @@ public:
 class Block : public Stm {
 public:
   std::vector<Stm *> stms;
+  Block *asBlock() override { return this; }
   int accept(Visitor *v) override;
   ~Block() { for (auto s : stms) delete s; }
 };
@@ -431,6 +503,7 @@ public:
   std::string name;
   std::vector<Param> params;
   Block *body = nullptr;
+  bool isInlined = false;
   int accept(Visitor *v);
   ~FunDef() { delete body; }
 };

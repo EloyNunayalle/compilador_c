@@ -10,8 +10,10 @@
 //     · cálculo de layout de structs (tamaño y offset por campo)
 //     · cuenta el tamaño del frame de cada función
 //
-//   Optimizer — plegado de constantes, identidades algebraicas, reducción
-//               de fuerza (se ejecuta entre el parser y el typechecker).
+//   InlineVisitor — inline de funciones pequeñas (cuerpo = return expr)
+//   FoldVisitor   — plegado de constantes, identidades algebraicas, reducción de fuerza
+//   SethiVisitor  — etiquetado Sethi-Ullman para orden óptimo de evaluación
+//   (se ejecutan entre el parser y el typechecker, pipeline: Inline → Fold → Sethi)
 //
 //   GenCodeVisitor — generación de x86-64 (AT&T, System V):
 //     · emite ensamblador ensamblable con gcc
@@ -166,25 +168,124 @@ private:
 };
 
 // =============================================================================
-// Optimizer — optimización sobre el AST (independiente del codegen)
-//   · Plegado de constantes (constant folding): 2+3 -> 5, 4*5-1 -> 19
-//   · Identidades algebraicas: x+0, x*1, x*0, x-0, x/1
-//   · Reducción de fuerza: x*2 -> x+x
-// Se activa con -O1 (por defecto). Con -O0 se omite para comparar.
+// InlineVisitor — inline de funciones pequeñas (cuerpo = return expr)
 // =============================================================================
 
-class Optimizer {
+class InlineVisitor : public Visitor {
 public:
-  int foldCount = 0;      // nº de plegados de constantes realizados
-  int algebraCount = 0;   // nº de simplificaciones algebraicas
-  int strengthCount = 0;  // nº de reducciones de fuerza
+  std::unordered_map<std::string, FunDef*> inlineFunctions;
 
-  void run(Program *p);
+  int Inline(Program *program);
+  bool isInlineable(FunDef *fd);
+  void inlineExp(Exp *&exp);
+  void substituteParameters(Exp *&exp, FunDef *fd, CallExp *call);
+  Exp *cloneReturn(FunDef *fd);
 
-private:
-  void fold(Exp *&e);       // reescribe 'e' en su lugar
-  void optStm(Stm *s);
-  void optBlock(Block *b);
+  int visit(IntLit *e) override;
+  int visit(FloatLit *e) override;
+  int visit(StringLit *e) override;
+  int visit(CastExp *e) override;
+  int visit(IdExp *e) override;
+  int visit(UnaryExp *e) override;
+  int visit(BinaryExp *e) override;
+  int visit(CallExp *e) override;
+  int visit(AddrExp *e) override;
+  int visit(DerefExp *e) override;
+  int visit(IndexExp *e) override;
+  int visit(FieldExp *e) override;
+  int visit(SizeofExp *e) override;
+  int visit(VarDecStm *s) override;
+  int visit(AssignStm *s) override;
+  int visit(ExprStm *s) override;
+  int visit(ReturnStm *s) override;
+  int visit(IfStm *s) override;
+  int visit(WhileStm *s) override;
+  int visit(DoWhileStm *s) override;
+  int visit(ForStm *s) override;
+  int visit(BreakStm *s) override;
+  int visit(ContinueStm *s) override;
+  int visit(Block *b) override;
+  int visit(FunDef *f) override;
+  int visit(Program *p) override;
+};
+
+// =============================================================================
+// FoldVisitor — plegado de constantes + identidades algebraicas + reducción de fuerza
+//   · Constant folding: 2+3 → 5
+//   · Algebraicas: x+0, x*1, x*0, x/1
+//   · Strength reduction: x*2 → x+x
+// =============================================================================
+
+class FoldVisitor : public Visitor {
+public:
+  int foldCount = 0;
+  int algebraCount = 0;
+  int strengthCount = 0;
+
+  int Fold(Program *p);
+
+  int visit(IntLit *e) override;
+  int visit(FloatLit *e) override;
+  int visit(StringLit *e) override;
+  int visit(CastExp *e) override;
+  int visit(IdExp *e) override;
+  int visit(UnaryExp *e) override;
+  int visit(BinaryExp *e) override;
+  int visit(CallExp *e) override;
+  int visit(AddrExp *e) override;
+  int visit(DerefExp *e) override;
+  int visit(IndexExp *e) override;
+  int visit(FieldExp *e) override;
+  int visit(SizeofExp *e) override;
+  int visit(VarDecStm *s) override;
+  int visit(AssignStm *s) override;
+  int visit(ExprStm *s) override;
+  int visit(ReturnStm *s) override;
+  int visit(IfStm *s) override;
+  int visit(WhileStm *s) override;
+  int visit(DoWhileStm *s) override;
+  int visit(ForStm *s) override;
+  int visit(BreakStm *s) override;
+  int visit(ContinueStm *s) override;
+  int visit(Block *b) override;
+  int visit(FunDef *f) override;
+  int visit(Program *p) override;
+};
+
+// =============================================================================
+// SethiVisitor — etiquetado Sethi-Ullman para orden óptimo de evaluación
+// =============================================================================
+
+class SethiVisitor : public Visitor {
+public:
+  int Sethi(Program *p);
+
+  int visit(IntLit *e) override;
+  int visit(FloatLit *e) override;
+  int visit(StringLit *e) override;
+  int visit(CastExp *e) override;
+  int visit(IdExp *e) override;
+  int visit(UnaryExp *e) override;
+  int visit(BinaryExp *e) override;
+  int visit(CallExp *e) override;
+  int visit(AddrExp *e) override;
+  int visit(DerefExp *e) override;
+  int visit(IndexExp *e) override;
+  int visit(FieldExp *e) override;
+  int visit(SizeofExp *e) override;
+  int visit(VarDecStm *s) override;
+  int visit(AssignStm *s) override;
+  int visit(ExprStm *s) override;
+  int visit(ReturnStm *s) override;
+  int visit(IfStm *s) override;
+  int visit(WhileStm *s) override;
+  int visit(DoWhileStm *s) override;
+  int visit(ForStm *s) override;
+  int visit(BreakStm *s) override;
+  int visit(ContinueStm *s) override;
+  int visit(Block *b) override;
+  int visit(FunDef *f) override;
+  int visit(Program *p) override;
 };
 
 // =============================================================================
