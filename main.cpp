@@ -69,10 +69,11 @@ int main(int argc, char *argv[]) {
 
     FoldVisitor fold;
     fold.Fold(program);
-    std::cout << "Optimizacion -O1: " << fold.foldCount
-              << " plegados de constantes, " << fold.algebraCount
-              << " identidades algebraicas, " << fold.strengthCount
-              << " reducciones de fuerza.\n";
+    std::cout << "Optimizacion -O1: " << inl.inlineCount
+              << " inlines, " << fold.foldCount
+              << " plegados, " << fold.algebraCount
+              << " identidades, " << fold.strengthCount
+              << " reducciones.\n";
 
     SethiVisitor sethi;
     sethi.Sethi(program);

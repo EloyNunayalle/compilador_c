@@ -1,4 +1,4 @@
-Test results - sá.,  4 de jul. de 2026  2:19:01
+Test results - Sat Jul  4 09:49:54 UTC 2026
 ========================
 [OK]   t01_arith
 [OK]   t02_control
@@ -15,5 +15,7 @@ Test results - sá.,  4 de jul. de 2026  2:19:01
 [OK]   t13_funcptr
 [OK]   t14_optim
 [OK]   t15_types
+[OK]   t16_inline
+[OK]   t17_sethi
 
-15/15 tests passed.
+17/17 tests passed.

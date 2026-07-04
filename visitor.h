@@ -173,6 +173,7 @@ private:
 
 class InlineVisitor : public Visitor {
 public:
+  int inlineCount = 0;
   std::unordered_map<std::string, FunDef*> inlineFunctions;
 
   int Inline(Program *program);

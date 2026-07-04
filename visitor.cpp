@@ -428,7 +428,7 @@ int GenCodeVisitor::visit(Program *p) {
   }
 
   out << "\n\t.text\n";
-  for (auto f : p->functions) f->accept(this);
+  for (auto f : p->functions) if (!f->isInlined) f->accept(this);
 
   // ---- Constantes de solo-lectura en .rdata (PE/COFF) ----
   if (!stringPool.empty() || !doublePool.empty()) {
@@ -987,6 +987,7 @@ int GenCodeVisitor::visit(BinaryExp *e) {
     e->left->accept(this);
     out << "\tmovq %rax, %rcx\n";
     out << "\tpopq %rax\n";
+    out << "\txchgq %rax, %rcx\n";
   }
 
   switch (e->op) {
@@ -1168,6 +1169,31 @@ void InlineVisitor::substituteParameters(Exp *&exp, FunDef *fd, CallExp *call) {
     substituteParameters(un->operand, fd, call);
     return;
   }
+  if (auto fc = exp->asCall()) {
+    for (auto &arg : fc->args) substituteParameters(arg, fd, call);
+    return;
+  }
+  if (auto cast = exp->asCast()) {
+    substituteParameters(cast->operand, fd, call);
+    return;
+  }
+  if (auto addr = exp->asAddr()) {
+    substituteParameters(addr->operand, fd, call);
+    return;
+  }
+  if (auto der = exp->asDeref()) {
+    substituteParameters(der->operand, fd, call);
+    return;
+  }
+  if (auto idx = exp->asIndex()) {
+    substituteParameters(idx->base, fd, call);
+    substituteParameters(idx->index, fd, call);
+    return;
+  }
+  if (auto fld = exp->asField()) {
+    substituteParameters(fld->obj, fd, call);
+    return;
+  }
   if (auto id = exp->asId()) {
     for (size_t i = 0; i < fd->params.size(); i++) {
       if (id->name == fd->params[i].name) {
@@ -1199,6 +1225,7 @@ void InlineVisitor::inlineExp(Exp *&exp) {
   if (!newTree) return;
   substituteParameters(newTree, it->second, fc);
   inlineExp(newTree);
+  inlineCount++;
   delete exp;
   exp = newTree;
 }
@@ -1228,7 +1255,7 @@ int InlineVisitor::visit(DerefExp *e) { inlineExp(e->operand); return 0; }
 int InlineVisitor::visit(IndexExp *e) { inlineExp(e->base); inlineExp(e->index); return 0; }
 int InlineVisitor::visit(FieldExp *e) { inlineExp(e->obj); return 0; }
 int InlineVisitor::visit(SizeofExp *) { return 0; }
-int InlineVisitor::visit(VarDecStm *) { return 0; }
+int InlineVisitor::visit(VarDecStm *s) { for (auto &vi : s->vars) if (vi.init) inlineExp(vi.init); return 0; }
 int InlineVisitor::visit(AssignStm *s) { inlineExp(s->target); inlineExp(s->value); return 0; }
 int InlineVisitor::visit(ExprStm *s) { inlineExp(s->e); return 0; }
 int InlineVisitor::visit(ReturnStm *s) { if (s->e) inlineExp(s->e); return 0; }
@@ -1477,7 +1504,7 @@ int SethiVisitor::visit(IndexExp *e) {
 }
 int SethiVisitor::visit(FieldExp *e) { e->obj->accept(this); e->label = e->obj->label; return 0; }
 int SethiVisitor::visit(SizeofExp *) { return 0; }
-int SethiVisitor::visit(VarDecStm *) { return 0; }
+int SethiVisitor::visit(VarDecStm *s) { for (auto &vi : s->vars) if (vi.init) vi.init->accept(this); return 0; }
 int SethiVisitor::visit(AssignStm *s) { s->target->accept(this); s->value->accept(this); return 0; }
 int SethiVisitor::visit(ExprStm *s) { s->e->accept(this); return 0; }
 int SethiVisitor::visit(ReturnStm *s) { if (s->e) s->e->accept(this); return 0; }

@@ -6,6 +6,9 @@ services:
     container_name: minicc
     ports:
       - "80:80"
+    volumes:
+      - ./tests:/app/tests
+      - ./benchmarks:/app/benchmarks
     environment:
       - PYTHONUNBUFFERED=1
     restart: unless-stopped
