@@ -1,0 +1,33 @@
+# Build artifacts
+minicc
+minicc.exe
+minicc_api
+minicc_api.exe
+*.o
+*.obj
+*.s
+
+# Test artifacts
+tests/*.exe
+tests/*_tokens.txt
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+
+# Backend
+__pycache__/
+*.pyc
+venv/
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+.DS_Store

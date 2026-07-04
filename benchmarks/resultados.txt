@@ -1,0 +1,11 @@
+>> Construyendo minicc...
+
+benchmark        | correcto |   mc-O0(s)   mc-O1(s)  gcc-O0(s)  gcc-O2(s) |   mcO0-B   mcO1-B  gccO0-B  gccO2-B
+-------------------------------------------------------------------------------------------------------------------------
+bench_fib        | SI       |      0.149      0.138      0.107      0.128 |   135644   135644   135588   136720
+bench_float      | SI       |      0.315      0.299      0.151      0.115 |   136102   136102   136082   136118
+bench_matmul     | SI       |      0.127      0.116      0.118      0.125 |   223600   223600   136136   136172
+bench_primes     | SI       |      0.129      0.135      0.125      0.122 |   136242   136242   135588   135696
+
+Leyenda: mc = minicc, gcc = GCC. Tiempos: mejor de 3 corridas (segundos).
+Tamaños en bytes del ejecutable. 'correcto'=SI significa salida idéntica a gcc.

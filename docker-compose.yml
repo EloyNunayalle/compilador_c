@@ -1,0 +1,11 @@
+services:
+  minicc:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: minicc
+    ports:
+      - "80:80"
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
