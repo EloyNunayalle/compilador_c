@@ -2,21 +2,28 @@
 #define PARSER_H
 
 // =============================================================================
-// parser.h — Parser recursivo-descendente para MiniC (gramática C)
+// parser.h — Parser recursivo-descendente para MiniC (subconjunto de C)
 // =============================================================================
-// Gramática (M1):
-//   Program    → (VarDecl | FunDef)*
-//   FunDef     → Type ID '(' Params ')' Block
-//   Params     → ε | Param (',' Param)*
-//   Param      → Type ID
-//   Type       → ('int'|'double'|'char'|'void'|'bool') '*'*
-//   Block      → '{' Stm* '}'
-//   Stm        → VarDecl | If | While | For | DoWhile | Return
-//              | Break | Continue | Block | ExprOrAssign ';'
-//   VarDecl    → Type InitDecl (',' InitDecl)* ';'
-//   InitDecl   → ID ('[' INT ']')? ('=' Expr)?
-//   Expr       → assignment
-//   (precedencia estándar de C hacia abajo)
+// Gramática:
+//   Program      → (StructDef | VarDecl | FunDef)*
+//   StructDef    → 'struct' ID '{' Field+ '}' ';'
+//   FunDef       → Type ID '(' Params ')' Block
+//   Params       → ε | Param (',' Param)*
+//   Param        → Type ID ('[' ']' | '[' INT ']')?
+//                | Type '(' '*' ID ')' '(' ParamTypes ')'
+//   Type         → ('int'|'double'|'char'|'void'|'bool'|'struct' ID) '*'*
+//   Block        → '{' Stm* '}'
+//   Stm          → VarDecl | If | While | For | DoWhile | Return
+//                | Break | Continue | Block | ExprOrAssign ';'
+//   VarDecl      → Type InitDecl (',' InitDecl)* ';'
+//   InitDecl     → ID ('*')? ('[' INT ']' ('[' INT ']')?)? ('=' Expr)?
+//   Expr         → '||'  (precedencia descendente estándar de C:
+//                  '&&', '==|!=', '<|>|<=|>=', '+|-', '*|/|%', unario)
+//   Unary        → '-' | '!' | '&' | '*' | 'sizeof' | postfix
+//   Postfix      → primary ('[' Expr ']' | '.' ID | '->' ID)*
+//   Primary      → INT_LIT | FLOAT_LIT | CHAR_LIT | STRING_LIT
+//                | 'true' | 'false' | ID ('(' Args ')')? | '(' Expr ')'
+//   (No incluye ternario ?:, ni switch/case.)
 // =============================================================================
 
 #include "ast.h"

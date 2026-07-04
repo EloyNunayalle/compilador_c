@@ -7,7 +7,11 @@
 //   TypeCheckerVisitor — análisis semántico + verificación de tipos:
 //     · variables declaradas, funciones existentes, aridad de llamadas
 //     · verificación/propagación de tipos, promoción int->double
+//     · cálculo de layout de structs (tamaño y offset por campo)
 //     · cuenta el tamaño del frame de cada función
+//
+//   Optimizer — plegado de constantes, identidades algebraicas, reducción
+//               de fuerza (se ejecuta entre el parser y el typechecker).
 //
 //   GenCodeVisitor — generación de x86-64 (AT&T, System V):
 //     · emite ensamblador ensamblable con gcc

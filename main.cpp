@@ -5,10 +5,11 @@
 //   1. Leer archivo fuente (.c)
 //   2. Scanner  → tokens
 //   3. Parser   → AST
-//   4. TypeChecker (análisis semántico + verificación de tipos)
-//   5. GenCode  → x86-64 AT&T en <archivo>.s
+//   4. Optimizer → plegado de constantes y simplificaciones (-O1 por defecto)
+//   5. TypeChecker (análisis semántico + verificación de tipos)
+//   6. GenCode  → x86-64 AT&T en <archivo>.s
 //
-// Uso:  ./minicc <archivo.c> [-o salida.s]
+// Uso:  ./minicc <archivo.c> [-o salida.s] [-O0|-O1]
 // =============================================================================
 
 #include "parser.h"

@@ -4,18 +4,25 @@
 // =============================================================================
 // ast.h — Árbol de Sintaxis Abstracta de MiniC
 // =============================================================================
-// Jerarquía (Milestone 1 — núcleo entero):
+// Jerarquía:
 //
 //   Exp (abstracta)
 //     ├── IntLit      — literal entero (también char/bool tras plegado)
-//     ├── StringLit   — literal de cadena (para printf y char*)
+//     ├── FloatLit    — literal double
+//     ├── StringLit   — literal de cadena
+//     ├── CastExp     — (tipo) expr
 //     ├── IdExp       — variable (lvalue)
 //     ├── UnaryExp    — -x, !x
-//     ├── BinaryExp   — a op b
-//     └── CallExp     — f(args)   (incluye printf builtin)
+//     ├── BinaryExp   — a op b  (+, -, *, /, %, <, >, <=, >=, ==, !=, &&, ||)
+//     ├── CallExp     — f(args)   (incluye printf builtin)
+//     ├── AddrExp     — &lvalue
+//     ├── DerefExp    — *ptr  (lvalue)
+//     ├── IndexExp    — base[index]  (lvalue)
+//     ├── FieldExp    — obj.field / ptr->field  (lvalue)
+//     └── SizeofExp   — sizeof(tipo) / sizeof(expr)
 //
 //   Stm (abstracta)
-//     ├── VarDecStm   — int a = 1, b;
+//     ├── VarDecStm   — int a = 1, b;  (locales y globales)
 //     ├── AssignStm   — lvalue (=|+=|-=|*=|/=) exp
 //     ├── ExprStm     — exp ;
 //     ├── ReturnStm   — return exp? ;
@@ -26,9 +33,7 @@
 //     ├── BreakStm / ContinueStm
 //     └── Block       — { Stm* }   (define un scope)
 //
-//   Param, FunDef, Program
-//
-// Se añaden nodos por milestone (punteros, floats, structs) sin romper M1.
+//   StructDef, Param, FunDef, Program
 // =============================================================================
 
 #include <string>
@@ -53,10 +58,12 @@ struct Type {
   Type() = default;
   Type(Base b, int p = 0) : base(b), pointer(p) {}
 
-  // Bytes del escalar base de ESTE tipo (válido cuando pointer==0):
-  // char=1; resto=8. Se usa para reservar arreglos en línea.
+  // Bytes del escalar base de ESTE tipo (válido cuando pointer==0).
   int baseElemSize() const {
-    return (pointer == 0 && base == CHAR) ? 1 : 8;
+    if (pointer == 0 && base == CHAR) return 1;
+    if (pointer == 0 && base == BOOL) return 1;
+    if (pointer == 0 && base == INT) return 4;
+    return 8;
   }
 
   // Tipo resultante de indexar UNA vez este arreglo/puntero.
@@ -73,16 +80,18 @@ struct Type {
 
   // Bytes que ocupa este tipo como VALOR almacenado.
   //   char        -> 1
+  //   bool        -> 1
+  //   int         -> 4
   //   puntero     -> 8
-  //   int[N]      -> N*8   ;  char[N] -> N   ;  int[R][C] -> R*C*8
+  //   double      -> 8
+  //   int[N]      -> N*4  ;  char[N] -> N   ;  int[R][C] -> R*C*4
   int storageSize() const {
     if (isArray) {
       long cells = (cols > 0) ? (long)arrayLen * cols : arrayLen;
       return (int)(cells * baseElemSize());
     }
     if (pointer > 0) return 8;
-    if (base == CHAR) return 1;
-    return 8; // int, double, bool
+    return sizeBytes();
   }
 
   // Bytes que avanza el puntero/arreglo al sumar 1 al índice (stride).
@@ -97,9 +106,7 @@ struct Type {
   }
   bool isVoid() const { return pointer == 0 && base == VOID; }
 
-  // Modelo de datos: todo ocupa 8 bytes (int como .quad) salvo char (1) en
-  // arreglos; para variables locales usamos 8 por simplicidad y reutilización
-  // del codegen de Sem15. sizeBytes() reporta el tamaño lógico de C.
+  // Tamaño lógico del tipo según C (int=4, char=1, bool=1, double=8, puntero=8).
   int sizeBytes() const {
     if (pointer > 0) return 8;
     switch (base) {

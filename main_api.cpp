@@ -4,6 +4,8 @@
 // Uso:
 //   ./minicc_api --mode json     (lee stdin, retorna AST en JSON a stdout)
 //   ./minicc_api --mode asm      (lee stdin, retorna x86-64 AT&T a stdout)
+//   ./minicc_api --mode both     (retorna AST y ensamblador)
+//   [-O0|-O1]                    (desactivar/activar optimizaciones)
 //
 // Salida: JSON con estructura unificada
 // =============================================================================

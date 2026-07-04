@@ -76,7 +76,7 @@ public:
     for (auto arg : e->args) {
       args.push_back(expToJson(arg));
     }
-    ast = json{{"type", "CallExp"}, {"function", e->name}, {"args", args}};
+    ast = json{{"type", "CallExp"}, {"name", e->name}, {"args", args}};
     return 0;
   }
 
@@ -95,7 +95,7 @@ public:
   int visit(IndexExp *e) override {
     if (!e) return 0;
     ast = json{{"type", "IndexExp"},
-               {"array", expToJson(e->base)},
+               {"base", expToJson(e->base)},
                {"index", expToJson(e->index)}};
     return 0;
   }
@@ -104,13 +104,18 @@ public:
     if (!e) return 0;
     ast = json{{"type", "FieldExp"},
                {"expr", expToJson(e->obj)},
-               {"field", e->field}};
+               {"field", e->field},
+               {"arrow", e->arrow}};
     return 0;
   }
 
   int visit(SizeofExp *e) override {
     if (!e) return 0;
-    ast = json{{"type", "SizeofExp"}, {"exprType", typeToJson(e->queryType)}};
+    if (e->queryExpr) {
+      ast = json{{"type", "SizeofExp"}, {"exprType", typeToJson(e->queryType)}, {"queryExpr", expToJson(e->queryExpr)}};
+    } else {
+      ast = json{{"type", "SizeofExp"}, {"exprType", typeToJson(e->queryType)}};
+    }
     return 0;
   }
 
@@ -120,13 +125,14 @@ public:
     json vars = json::array();
     for (const auto &v : s->vars) {
       json var = json{{"name", v.name},
-                      {"type", typeToJson(v.type)}};
+                      {"type", typeToJson(v.type)},
+                      {"arraySize", v.arraySize}};
       if (v.init) {
         var["init"] = expToJson(v.init);
       }
       vars.push_back(var);
     }
-    ast = json{{"type", "VarDecStm"}, {"declarations", vars}};
+    ast = json{{"type", "VarDecStm"}, {"baseType", typeToJson(s->type)}, {"declarations", vars}};
     return 0;
   }
 
@@ -236,12 +242,25 @@ public:
 
   int visit(Program *p) override {
     if (!p) return 0;
+    json structsJson = json::array();
+    for (auto sd : p->structs) {
+      json fields = json::array();
+      for (auto &f : sd->fields) {
+        fields.push_back(json{{"name", f.name}, {"type", typeToJson(f.type)}});
+      }
+      structsJson.push_back(json{{"type", "StructDef"}, {"name", sd->name}, {"fields", fields}});
+    }
+    json glbls = json::array();
+    for (auto g : p->globals) {
+      g->accept(this);
+      glbls.push_back(ast);
+    }
     json funcs = json::array();
     for (auto func : p->functions) {
       func->accept(this);
       funcs.push_back(ast);
     }
-    ast = json{{"type", "Program"}, {"functions", funcs}};
+    ast = json{{"type", "Program"}, {"structs", structsJson}, {"globals", glbls}, {"functions", funcs}};
     return 0;
   }
 
@@ -261,11 +280,14 @@ private:
   }
 
   json typeToJson(const Type &t) {
-    return json{{"base", typeBaseToString(t.base)},
-                {"pointer", t.pointer},
-                {"isArray", t.isArray},
-                {"arrayLen", t.arrayLen},
-                {"cols", t.cols}};
+    json obj = json{{"base", typeBaseToString(t.base)},
+                    {"pointer", t.pointer},
+                    {"isArray", t.isArray},
+                    {"arrayLen", t.arrayLen},
+                    {"cols", t.cols},
+                    {"isFuncPtr", t.isFuncPtr}};
+    if (t.base == Type::STRUCT) obj["structName"] = t.structName;
+    return obj;
   }
 
   std::string typeBaseToString(Type::Base base) {

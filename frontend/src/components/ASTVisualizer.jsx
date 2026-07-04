@@ -19,20 +19,24 @@ function getNodeLabel(d) {
       return type + ' (' + (d.data.op ?? '') + ')'
     case 'AssignStm':
       return type + ' (' + (d.data.op ?? '=') + ')'
+    case 'StructDef':
+      const fnames = (d.data.fields || []).map(f => f.name).join(', ')
+      return type + ': ' + (d.data.name ?? '') + ' {' + (fnames ? fnames : '') + '}'
     default:
       return type
   }
 }
 
-function getNodeRadius(d) {
-  const label = getNodeLabel(d)
-  return Math.max(16, Math.min(30, label.length * 3.5 + 8))
+const NODE_RADIUS = 28
+
+function getNodeRadius() {
+  return NODE_RADIUS
 }
 
 function childrenAccessor(d) {
   switch (d.type) {
     case 'Program':
-      return d.functions
+      return [...(d.structs || []), ...(d.globals || []), ...(d.functions || [])]
     case 'FunDef':
       return d.body ? [d.body] : []
     case 'Block':
@@ -62,9 +66,11 @@ function childrenAccessor(d) {
     case 'CallExp':
       return d.args || []
     case 'IndexExp':
-      return [d.array, d.index].filter(Boolean)
+      return [d.base, d.index].filter(Boolean)
     case 'FieldExp':
       return d.expr ? [d.expr] : []
+    case 'StructDef':
+      return [] // fields tienen type como objeto Type, no como string discriminador
     default:
       return []
   }
@@ -91,16 +97,11 @@ export default function ASTVisualizer({ ast, loading = false }) {
     const root = d3.hierarchy(ast, childrenAccessor)
     const allDescendants = root.descendants()
 
-    const maxLabelLen = Math.max(...allDescendants.map(d => getNodeLabel(d).length), 4)
-    const nodeW = maxLabelLen * 7 + 16
+    const nodeW = NODE_RADIUS * 2 + 24
 
     const tree = d3.tree()
       .nodeSize([nodeW + 40, 90])
-      .separation((a, b) => {
-        const ra = getNodeRadius(a)
-        const rb = getNodeRadius(b)
-        return (ra + rb + 10) / nodeW
-      })
+      .separation((a, b) => (NODE_RADIUS * 2 + 10) / nodeW)
 
     const treeData = tree(root)
     const allNodes = treeData.descendants()
@@ -149,13 +150,65 @@ export default function ASTVisualizer({ ast, loading = false }) {
       .attr('stroke-width', 1.5)
 
     nodeSel.append('text')
-      .attr('dy', '0.35em')
       .attr('text-anchor', 'middle')
       .attr('fill', 'white')
-      .attr('font-size', '10px')
       .attr('font-weight', 'bold')
       .attr('pointer-events', 'none')
-      .text(d => getNodeLabel(d))
+      .each(function(d) {
+        const label = getNodeLabel(d)
+        const pad = 6
+        const availW = NODE_RADIUS * 2 - pad * 2
+        const availH = NODE_RADIUS * 2 - pad * 2
+
+        // separar parte fija (tipo) de parte variable (valor)
+        const sp = label.indexOf(' ')
+        const typePart = sp >= 0 ? label.slice(0, sp) : label
+        const valuePart = sp >= 0 ? label.slice(sp + 1) : ''
+
+        let fontSize
+        let lines = []
+
+        for (fontSize = 10; fontSize >= 4; fontSize -= 0.5) {
+          const cw = fontSize * 0.6
+          if (typePart.length * cw > availW) continue
+
+          const maxCpl = Math.max(1, Math.floor(availW / cw))
+
+          if (label.length <= maxCpl) {
+            lines = [label]
+            break
+          }
+
+          if (!valuePart) {
+            lines = [typePart]
+            break
+          }
+
+          const valLines = []
+          for (let i = 0; i < valuePart.length; i += maxCpl)
+            valLines.push(valuePart.slice(i, i + maxCpl))
+          lines = [typePart, ...valLines]
+
+          if (lines.length * fontSize * 1.3 <= availH) break
+        }
+
+        if (!lines.length) {
+          fontSize = Math.max(4, fontSize)
+          lines = [typePart]
+        }
+
+        const el = d3.select(this)
+        lines.forEach((line, idx) => {
+          const dy = idx === 0
+            ? -(lines.length * fontSize * 1.3) / 2 + fontSize * 0.65 + 'px'
+            : fontSize * 1.3 + 'px'
+          el.append('tspan')
+            .attr('x', 0)
+            .attr('dy', dy)
+            .attr('font-size', fontSize + 'px')
+            .text(line)
+        })
+      })
 
     const zoom_handler = d3.zoom()
       .scaleExtent([0.1, 4])

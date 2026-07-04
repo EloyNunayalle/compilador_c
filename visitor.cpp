@@ -1,25 +1,8 @@
-// =============================================================================
-// visitor.cpp — TypeChecker + GenCode (x86-64 AT&T, ABI Microsoft x64) MiniC
-// =============================================================================
-//   · Enteros en 8 bytes (.quad, %rax); char en 1 byte para punteros/arreglos.
-//     Los benchmarks usan valores en rango de int para paridad con gcc.
-//   · Convención: el resultado de evaluar una Exp queda en %rax.
-//   · Llamadas: Microsoft x64 — primeros 4 args enteros en RCX,RDX,R8,R9,
-//     32 bytes de shadow space y rsp alineado a 16 antes de cada call.
-// =============================================================================
-
 #include "visitor.h"
 #include <iostream>
 #include <stdexcept>
 
-// -----------------------------------------------------------------------------
-// ABI de destino: Microsoft x64 (Windows / MinGW)
-//   · Primeros 4 argumentos enteros: RCX, RDX, R8, R9
-//   · El llamador reserva 32 bytes de "shadow space" antes de cada call
-//   · rsp debe estar alineado a 16 en el punto del call
-//   · Símbolos sin @PLT; secciones PE (.rdata en vez de .rodata)
-// -----------------------------------------------------------------------------
-static const char *ARG_REGS[4] = {"%rdi", "%rsi", "%rdx", "%rcx"};
+static const char *ARG_REGS[6] = {"%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"};
 
 // =============================================================================
 // TypeCheckerVisitor
@@ -36,17 +19,15 @@ Type TypeCheckerVisitor::checkExp(Exp *e) {
   return e->exprType;
 }
 
-// Tamaño en bytes de un tipo en nuestro modelo (char=1; puntero=8;
-// struct=n_campos*8; int/double/bool=8).
+// Tamaño en bytes de un tipo (usa sizeBytes() de Type para tipos primitivos).
 static int sizeOfType(const Type &t,
                       const std::unordered_map<std::string, StructLayout> &S) {
   if (t.pointer > 0) return 8;
-  if (t.base == Type::CHAR) return 1;
   if (t.base == Type::STRUCT) {
     auto it = S.find(t.structName);
     return it != S.end() ? it->second.size : 0;
   }
-  return 8; // int, double, bool
+  return t.sizeBytes();
 }
 
 // Nombre de función de la libc que aceptamos sin declaración previa.
@@ -73,14 +54,21 @@ static bool isKnownExternal(const std::string &name, Type &retOut) {
 }
 
 void TypeCheckerVisitor::check(Program *program) {
-  // layouts de structs (campos de 8 bytes cada uno en nuestro modelo)
+  // layouts de structs (tamaño real por campo con alineación natural)
   for (StructDef *sd : program->structs) {
     StructLayout lay;
     int off = 0;
     for (auto &f : sd->fields) {
+      int sz = sizeOfType(f.type, structs);
+      int align = (sz > 8) ? 8 : sz; // alineación natural, máx 8
+      off = (off + align - 1) & ~(align - 1);
       lay.fieldOffset[f.name] = off;
       lay.fieldType[f.name] = f.type;
-      off += 8;
+      off += sz;
+    }
+    if (off > 0) {
+      int maxAlign = 8;
+      off = (off + maxAlign - 1) & ~(maxAlign - 1);
     }
     lay.size = off;
     structs[sd->name] = lay;
@@ -346,36 +334,41 @@ void GenCodeVisitor::generate(Program *program, TypeCheckerVisitor &tc) {
 // Tamaño en bytes de un tipo (para sizeof / reservas).
 int GenCodeVisitor::structSizeOf(const Type &t) {
   if (t.pointer > 0) return 8;
-  if (t.base == Type::CHAR) return 1;
   if (t.base == Type::STRUCT) {
     auto it = structs.find(t.structName);
     return it != structs.end() ? it->second.size : 0;
   }
-  return 8;
+  return t.sizeBytes();
 }
 
 // Con la dirección en %rax, carga el valor:
-//   double  -> %xmm0
-//   char    -> %rax (con signo, 1 byte)
-//   resto   -> %rax (8 bytes)
+//   double     -> %xmm0
+//   char/bool  -> %rax (con signo, 1 byte)
+//   int        -> %eax (4 bytes, zero-extiende)
+//   puntero/otro -> %rax (8 bytes)
 void GenCodeVisitor::loadFromAddr(const Type &t) {
   if (t.isFloating())
     out << "\tmovsd (%rax), %xmm0\n";
-  else if (t.pointer == 0 && t.base == Type::CHAR)
+  else if (t.pointer == 0 && (t.base == Type::CHAR || t.base == Type::BOOL))
     out << "\tmovsbq (%rax), %rax\n";
+  else if (t.pointer == 0 && t.base == Type::INT)
+    out << "\tmovl (%rax), %eax\n";
   else
     out << "\tmovq (%rax), %rax\n";
 }
 
 // Guarda el valor en la dirección de %rcx:
-//   double  -> desde %xmm0
-//   char    -> %al (1 byte)
-//   resto   -> %rax (8 bytes)
+//   double     -> desde %xmm0
+//   char/bool  -> %al (1 byte)
+//   int        -> %eax (4 bytes)
+//   puntero/otro -> %rax (8 bytes)
 void GenCodeVisitor::storeToAddr(const Type &t) {
   if (t.isFloating())
     out << "\tmovsd %xmm0, (%rcx)\n";
-  else if (t.pointer == 0 && t.base == Type::CHAR)
+  else if (t.pointer == 0 && (t.base == Type::CHAR || t.base == Type::BOOL))
     out << "\tmovb %al, (%rcx)\n";
+  else if (t.pointer == 0 && t.base == Type::INT)
+    out << "\tmovl %eax, (%rcx)\n";
   else
     out << "\tmovq %rax, (%rcx)\n";
 }
@@ -384,7 +377,14 @@ void GenCodeVisitor::storeToAddr(const Type &t) {
 // Entero vive en %rax, double en %xmm0.
 void GenCodeVisitor::emitConvert(const Type &from, const Type &to) {
   bool fF = from.isFloating(), tF = to.isFloating();
-  if (fF == tF) return;             // ambos int o ambos double: nada que hacer
+  if (fF == tF) {
+    if (!fF && to.base == Type::BOOL && from.base != Type::BOOL) {
+      out << "\ttest %rax, %rax\n";
+      out << "\tsetne %al\n";
+      out << "\tmovsbq %al, %rax\n";
+    }
+    return;
+  }
   if (!fF && tF)                    // int -> double
     out << "\tcvtsi2sdq %rax, %xmm0\n";
   else                             // double -> int (truncando, como C)
@@ -459,7 +459,7 @@ void GenCodeVisitor::assignLocal(const VarInit &vi) {
   else if (vt.base == Type::STRUCT && vt.pointer == 0)
     bytes = structSizeOf(vt);
   else
-    bytes = 8;
+    bytes = vt.sizeBytes();
   memoria[vi.name] = allocBlock(offset, bytes);
   varType[vi.name] = vt;
 }
@@ -519,11 +519,11 @@ int GenCodeVisitor::visit(FunDef *f) {
   // preservar %rbx del llamador (lo usamos como scratch de alineación)
   out << "\tmovq %rbx, -8(%rbp)\n";
 
-  // Guardar params entrantes en sus slots. En MS x64 el registro es POSICIONAL:
-  // el arg i va en el i-ésimo registro entero (RCX,RDX,R8,R9) o en XMMi si es
-  // double. El índice de registro es el mismo para ambos bancos.
-  static const char *XMM_ARG[4] = {"%xmm0", "%xmm1", "%xmm2", "%xmm3"};
-  for (size_t i = 0; i < f->params.size() && i < 4; i++) {
+  // Guardar params entrantes en sus slots. SysV x86-64:
+  // RDI=0, RSI=1, RDX=2, RCX=3, R8=4, R9=5; XMM0‑XMM7 para floats.
+  static const char *XMM_ARG[8] = {"%xmm0", "%xmm1", "%xmm2", "%xmm3",
+                                    "%xmm4", "%xmm5", "%xmm6", "%xmm7"};
+  for (size_t i = 0; i < f->params.size() && i < 6; i++) {
     int slot = memoria[f->params[i].name];
     if (f->params[i].type.isFloating())
       out << "\tmovsd " << XMM_ARG[i] << ", " << slot << "(%rbp)\n";
@@ -783,14 +783,16 @@ int GenCodeVisitor::visit(StringLit *e) {
 
 int GenCodeVisitor::visit(CastExp *e) {
   Type from = e->operand->exprType;
+  e->operand->accept(this);
   if (e->target.isFloating() && !from.isFloating()) {
-    e->operand->accept(this);           // int en %rax
-    out << "\tcvtsi2sdq %rax, %xmm0\n"; // -> double
+    out << "\tcvtsi2sdq %rax, %xmm0\n";
   } else if (!e->target.isFloating() && from.isFloating()) {
-    e->operand->accept(this);           // double en %xmm0
-    out << "\tcvttsd2siq %xmm0, %rax\n"; // -> int (trunca)
-  } else {
-    e->operand->accept(this);           // sin cambio de clase (int<->ptr<->char)
+    out << "\tcvttsd2siq %xmm0, %rax\n";
+  }
+  if (!e->target.isFloating() && e->target.base == Type::BOOL && from.base != Type::BOOL) {
+    out << "\ttest %rax, %rax\n";
+    out << "\tsetne %al\n";
+    out << "\tmovsbq %al, %rax\n";
   }
   return 0;
 }
@@ -821,8 +823,10 @@ int GenCodeVisitor::visit(IdExp *e) {
 
   if (t.isFloating())
     out << "\tmovsd " << loc << ", %xmm0\n";
-  else if (t.pointer == 0 && t.base == Type::CHAR)
+  else if (t.pointer == 0 && (t.base == Type::CHAR || t.base == Type::BOOL))
     out << "\tmovsbq " << loc << ", %rax\n";
+  else if (t.pointer == 0 && t.base == Type::INT)
+    out << "\tmovl " << loc << ", %eax\n";
   else
     out << "\tmovq " << loc << ", %rax\n";
   return 0;
@@ -1004,7 +1008,7 @@ int GenCodeVisitor::visit(BinaryExp *e) {
 }
 
 int GenCodeVisitor::visit(CallExp *e) {
-  static const char *XMM_ARG[4] = {"%xmm0", "%xmm1", "%xmm2", "%xmm3"};
+  // SysV x86-64: hasta 6 enteros (RDI,RSI,RDX,RCX,R8,R9) y 8 XMM (XMM0‑XMM7)
 
   // ---- print builtin: print(x) imprime un entero con salto de línea ----
   if (e->name == "print" && e->args.size() == 1) {
@@ -1013,7 +1017,6 @@ int GenCodeVisitor::visit(CallExp *e) {
     out << "\tleaq print_int_fmt(%rip), %rdi\n";   // 1er arg (formato)
     out << "\tmovq %rsp, %rbx\n";
     out << "\tandq $-16, %rsp\n";
-    out << "\tsubq $32, %rsp\n";
     out << "\tcall printf\n";
     out << "\tmovq %rbx, %rsp\n";
     return 0;
@@ -1064,22 +1067,40 @@ int GenCodeVisitor::visit(CallExp *e) {
     if (e->args[i]->exprType.isFloating() || (!variadic && paramIsDouble(i)))
       sseCount++;
 
-  // 2) Carga los primeros 4 args (posicionalmente) en sus registros.
-  //    El tope de pila tiene el último arg; recorremos de n-1 a 0.
+  // 2) Precompute GP register index for each argument.
+  //    SysV x86-64: floats use XMM registers and do NOT consume a GP slot.
+  //    Integers advance GP independently: RDI=0 → RSI=1 → RDX=2 → RCX=3 → R8=4 → R9=5.
+  int gpForArg[32];
+  int gpIdx = 0;
+  for (int i = 0; i < n && i < 32; i++) {
+    bool isF = e->args[i]->exprType.isFloating() || (!variadic && paramIsDouble(i));
+    if (isF) gpForArg[i] = -1;
+    else gpForArg[i] = gpIdx++;
+  }
+  // El tope de pila tiene el último arg; recorremos de n-1 a 0.
+  static const char *XMM[8] = {"%xmm0","%xmm1","%xmm2","%xmm3",
+                                "%xmm4","%xmm5","%xmm6","%xmm7"};
   int xmmIdx = sseCount - 1;
+  int stackArgs = 0;
   for (int i = n - 1; i >= 0; i--) {
     bool isF = e->args[i]->exprType.isFloating() || (!variadic && paramIsDouble(i));
-    if (i < 4) {
-      if (isF) {
-        out << "\tmovsd (%rsp), " << XMM_ARG[xmmIdx] << "\n\taddq $8, %rsp\n";
-        if (variadic)
-          out << "\tmovq " << XMM_ARG[xmmIdx] << ", " << ARG_REGS[i] << "\n";
-        xmmIdx--;
-      } else {
-        out << "\tpopq " << ARG_REGS[i] << "\n";
-      }
+    int g = gpForArg[i];  // -1 for float, 0-5 for GP register index
+    if (g >= 0 && g < 6) {
+      // integer arg that fits in a GP register
+      out << "\tpopq " << ARG_REGS[g] << "\n";
+    } else if (isF && xmmIdx >= 0) {
+      // float arg → XMM register (and NO GP save area for variadic)
+      out << "\tmovsd (%rsp), " << XMM[xmmIdx] << "\n\taddq $8, %rsp\n";
+      xmmIdx--;
     } else {
-      out << "\tpopq %rax\n";
+      // stack arg (beyond 6 GP regs) → pop into scratch register
+      if (stackArgs == 0)
+        out << "\tpopq %r10\n";
+      else if (stackArgs == 1)
+        out << "\tpopq %r11\n";
+      else
+        out << "\tpopq %rax\n";
+      stackArgs++;
     }
   }
 
@@ -1087,7 +1108,17 @@ int GenCodeVisitor::visit(CallExp *e) {
 
   out << "\tmovq %rsp, %rbx\n";
   out << "\tandq $-16, %rsp\n";
-  out << "\tsubq $32, %rsp\n";
+  // keep RSP 16-byte aligned after pushq of stack args (SysV: no shadow space)
+  // odd count → pre-adjust 8 so total offset stays multiple of 16
+  if ((stackArgs & 1) != 0)
+    out << "\tsubq $8, %rsp\n";
+
+  // push back stack args in correct order after alignment
+  if (stackArgs >= 1)
+    out << "\tpushq %r10\n";   // r10 = last stack arg (highest index)
+  if (stackArgs >= 2)
+    out << "\tpushq %r11\n";   // r11 = second-to-last stack arg
+
   if (variadic) out << "\tmovb $" << sseCount << ", %al\n";
   if (indirect) out << "\tcall *%r10\n";
   else out << "\tcall " << e->name << "\n";

@@ -5,8 +5,10 @@
 // token.h — Token de MiniC (subconjunto de C)
 // =============================================================================
 // Unidad léxica mínima producida por el Scanner. Cada Token tiene un tipo y el
-// texto literal del lexema. El conjunto de tipos cubre las fases M1..M3
-// (enteros, punteros, floats, strings) aunque el parser las habilite por etapas.
+// texto literal del lexema. Cubre enteros, flotantes, punteros, cadenas,
+// structs, y todas las palabras clave y operadores de C soportados.
+// Nota: SWITCH/CASE/DEFAULT son reconocidos por el scanner pero el parser
+// todavía no implementa la sentencia switch.
 // =============================================================================
 
 #include <ostream>

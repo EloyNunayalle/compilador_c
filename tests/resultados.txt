@@ -1,0 +1,19 @@
+Test results - sá.,  4 de jul. de 2026  2:19:01
+========================
+[OK]   t01_arith
+[OK]   t02_control
+[OK]   t03_functions
+[OK]   t04_pointers
+[OK]   t05_arrays
+[OK]   t06_structs
+[OK]   t07_strings
+[OK]   t08_malloc
+[OK]   t09_floats
+[OK]   t10_promotion
+[OK]   t11_float_cmp
+[OK]   t12_matrix
+[OK]   t13_funcptr
+[OK]   t14_optim
+[OK]   t15_types
+
+15/15 tests passed.

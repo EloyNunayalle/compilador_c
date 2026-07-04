@@ -30,6 +30,11 @@ WORKDIR /app
 # Copy compiled compilers from stage 1
 COPY --from=cpp-builder /app/minicc /app/minicc_api ./
 
+# Copy Makefile, tests, and benchmarks for make test / make bench
+COPY Makefile ./
+COPY tests/ ./tests/
+COPY benchmarks/ ./benchmarks/
+
 # Copy backend
 COPY backend/src/backend.py ./
 COPY backend/requirements.txt ./

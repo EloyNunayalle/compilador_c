@@ -446,7 +446,7 @@ Stm *Parser::parseStm() {
 }
 
 // =============================================================================
-// Expresiones (precedencia C, sin ternario en M1)
+// Expresiones (precedencia estándar de C, sin ternario)
 // =============================================================================
 
 Exp *Parser::parseExpr() { return parseLogicalOr(); }
