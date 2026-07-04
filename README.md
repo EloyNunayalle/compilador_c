@@ -14,7 +14,7 @@ Acceder a http://localhost
 
 - **Code Editor** — Monaco Editor con resaltado de sintaxis C
 - **AST Visualization** — Árbol interactivo con D3.js (zoom, colores por tipo)
-- **Assembly Viewer** — x86-64 AT&T con números de línea
+- **Assembly Viewer** — x86-64 con números de línea
 - **Output Panel** — Resultado de ejecución del programa compilado
 
 ## Project Structure
