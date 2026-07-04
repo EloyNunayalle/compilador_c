@@ -428,7 +428,7 @@ int GenCodeVisitor::visit(Program *p) {
   }
 
   out << "\n\t.text\n";
-  for (auto f : p->functions) if (!f->isInlined) f->accept(this);
+  for (auto f : p->functions) f->accept(this);
 
   // ---- Constantes de solo-lectura en .rdata (PE/COFF) ----
   if (!stringPool.empty() || !doublePool.empty()) {
@@ -1170,6 +1170,29 @@ void InlineVisitor::substituteParameters(Exp *&exp, FunDef *fd, CallExp *call) {
     return;
   }
   if (auto fc = exp->asCall()) {
+    for (size_t i = 0; i < fd->params.size(); i++) {
+      if (fc->name != fd->params[i].name) continue;
+      // El nombre coincide con un parámetro (puntero a función).
+      // Sustituir los argumentos del call y reemplazar el target.
+      for (auto &arg : fc->args) substituteParameters(arg, fd, call);
+      std::string newName;
+      Exp *ac = call->args[i]->clone();
+      if (auto id = ac->asId()) newName = id->name;
+      delete ac;
+      if (!newName.empty()) {
+        // Robar los args ya sustituidos y crear un nuevo CallExp.
+        std::vector<Exp*> stolen;
+        for (auto a : fc->args) stolen.push_back(a);
+        fc->args.clear();
+        Type et = fc->exprType;
+        delete exp;
+        auto *nc = new CallExp(newName);
+        nc->exprType = et;
+        nc->args = std::move(stolen);
+        exp = nc;
+      }
+      return;
+    }
     for (auto &arg : fc->args) substituteParameters(arg, fd, call);
     return;
   }

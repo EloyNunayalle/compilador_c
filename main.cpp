@@ -5,8 +5,8 @@
 //   1. Leer archivo fuente (.c)
 //   2. Scanner  → tokens
 //   3. Parser   → AST
-//   4. InlineVisitor → FoldVisitor → SethiVisitor (-O1 por defecto)
-//   5. TypeChecker (análisis semántico + verificación de tipos)
+//   4. TypeChecker (análisis semántico + verificación de tipos)
+//   5. InlineVisitor → FoldVisitor → SethiVisitor (-O1 por defecto)
 //   6. GenCode  → x86-64 AT&T en <archivo>.s
 //
 // Uso:  ./minicc <archivo.c> [-o salida.s] [-O0|-O1]
@@ -62,7 +62,16 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
-  // ---- Optimización sobre el AST (antes del análisis semántico) ----
+  // ---- Semántico (antes de optimizaciones) ----
+  TypeCheckerVisitor tc;
+  tc.check(program);
+  if (!tc.ok) {
+    std::cerr << "Compilación abortada por errores semánticos.\n";
+    delete program;
+    return 1;
+  }
+
+  // ---- Optimización sobre el AST ----
   if (optimize) {
     InlineVisitor inl;
     inl.Inline(program);
@@ -77,15 +86,6 @@ int main(int argc, char *argv[]) {
 
     SethiVisitor sethi;
     sethi.Sethi(program);
-  }
-
-  // ---- Semántico ----
-  TypeCheckerVisitor tc;
-  tc.check(program);
-  if (!tc.ok) {
-    std::cerr << "Compilación abortada por errores semánticos.\n";
-    delete program;
-    return 1;
   }
 
   // ---- Generación de código ----

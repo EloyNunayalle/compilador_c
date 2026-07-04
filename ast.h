@@ -204,7 +204,7 @@ public:
   IntLit(long v) : value(v) {}
   IntLit *asIntLit() override { return this; }
   int accept(Visitor *v) override;
-  Exp *clone() const override { return new IntLit(value); }
+  Exp *clone() const override { auto *c = new IntLit(value); c->exprType = exprType; return c; }
 };
 
 // ---- Literal de punto flotante (double) ----
@@ -214,7 +214,7 @@ public:
   FloatLit(double v) : value(v) {}
   FloatLit *asFloatLit() override { return this; }
   int accept(Visitor *v) override;
-  Exp *clone() const override { return new FloatLit(value); }
+  Exp *clone() const override { auto *c = new FloatLit(value); c->exprType = exprType; return c; }
 };
 
 class StringLit : public Exp {
@@ -223,7 +223,7 @@ public:
   int labelId = -1;  // índice de etiqueta .LC asignado en codegen
   StringLit(const std::string &v) : value(v) {}
   int accept(Visitor *v) override;
-  Exp *clone() const override { return new StringLit(value); }
+  Exp *clone() const override { auto *c = new StringLit(value); c->exprType = exprType; return c; }
 };
 
 class IdExp : public Exp {
@@ -233,7 +233,7 @@ public:
   bool isLValue() const override { return true; }
   IdExp *asId() override { return this; }
   int accept(Visitor *v) override;
-  Exp *clone() const override { return new IdExp(name); }
+  Exp *clone() const override { auto *c = new IdExp(name); c->exprType = exprType; return c; }
 };
 
 class UnaryExp : public Exp {
@@ -243,7 +243,7 @@ public:
   UnaryExp(UnaryOp op, Exp *e) : op(op), operand(e) {}
   UnaryExp *asUnary() override { return this; }
   int accept(Visitor *v) override;
-  Exp *clone() const override { return new UnaryExp(op, operand->clone()); }
+  Exp *clone() const override { auto *c = new UnaryExp(op, operand->clone()); c->exprType = exprType; return c; }
   ~UnaryExp() { delete operand; }
 };
 
@@ -255,7 +255,7 @@ public:
   BinaryExp(Exp *l, BinaryOp op, Exp *r) : op(op), left(l), right(r) {}
   BinaryExp *asBinary() override { return this; }
   int accept(Visitor *v) override;
-  Exp *clone() const override { return new BinaryExp(left->clone(), op, right->clone()); }
+  Exp *clone() const override { auto *c = new BinaryExp(left->clone(), op, right->clone()); c->exprType = exprType; return c; }
   ~BinaryExp() { delete left; delete right; }
 };
 
@@ -267,8 +267,9 @@ public:
   CallExp *asCall() override { return this; }
   int accept(Visitor *v) override;
   Exp *clone() const override {
-    CallExp *c = new CallExp(name);
+    auto *c = new CallExp(name);
     for (auto a : args) c->args.push_back(a->clone());
+    c->exprType = exprType;
     return c;
   }
   ~CallExp() { for (auto a : args) delete a; }
@@ -281,7 +282,7 @@ public:
   AddrExp(Exp *e) : operand(e) {}
   AddrExp *asAddr() override { return this; }
   int accept(Visitor *v) override;
-  Exp *clone() const override { return new AddrExp(operand->clone()); }
+  Exp *clone() const override { auto *c = new AddrExp(operand->clone()); c->exprType = exprType; return c; }
   ~AddrExp() { delete operand; }
 };
 
@@ -293,7 +294,7 @@ public:
   bool isLValue() const override { return true; }
   DerefExp *asDeref() override { return this; }
   int accept(Visitor *v) override;
-  Exp *clone() const override { return new DerefExp(operand->clone()); }
+  Exp *clone() const override { auto *c = new DerefExp(operand->clone()); c->exprType = exprType; return c; }
   ~DerefExp() { delete operand; }
 };
 
@@ -306,7 +307,7 @@ public:
   bool isLValue() const override { return true; }
   IndexExp *asIndex() override { return this; }
   int accept(Visitor *v) override;
-  Exp *clone() const override { return new IndexExp(base->clone(), index->clone()); }
+  Exp *clone() const override { auto *c = new IndexExp(base->clone(), index->clone()); c->exprType = exprType; return c; }
   ~IndexExp() { delete base; delete index; }
 };
 
@@ -321,7 +322,7 @@ public:
   bool isLValue() const override { return true; }
   FieldExp *asField() override { return this; }
   int accept(Visitor *v) override;
-  Exp *clone() const override { return new FieldExp(obj->clone(), field, arrow); }
+  Exp *clone() const override { auto *c = new FieldExp(obj->clone(), field, arrow); c->exprType = exprType; return c; }
   ~FieldExp() { delete obj; }
 };
 
@@ -333,7 +334,7 @@ public:
   CastExp(Type t, Exp *e) : target(t), operand(e) {}
   CastExp *asCast() override { return this; }
   int accept(Visitor *v) override;
-  Exp *clone() const override { return new CastExp(target, operand->clone()); }
+  Exp *clone() const override { auto *c = new CastExp(target, operand->clone()); c->exprType = exprType; return c; }
   ~CastExp() { delete operand; }
 };
 

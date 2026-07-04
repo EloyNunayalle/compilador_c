@@ -51,19 +51,7 @@ int main(int argc, char *argv[]) {
     Parser parser(&scanner);
     Program *program = parser.parseProgram();
 
-    // ---- Optimización sobre el AST (opcional) ----
-    if (optimize) {
-      InlineVisitor inl;
-      inl.Inline(program);
-
-      FoldVisitor fold;
-      fold.Fold(program);
-
-      SethiVisitor sethi;
-      sethi.Sethi(program);
-    }
-
-    // ---- Semántico ----
+    // ---- Semántico (antes de optimizaciones) ----
     TypeCheckerVisitor tc;
     tc.check(program);
     if (!tc.ok) {
@@ -74,6 +62,18 @@ int main(int argc, char *argv[]) {
       std::cout << errorResponse.dump() << std::endl;
       delete program;
       return 1;
+    }
+
+    // ---- Optimización sobre el AST (opcional) ----
+    if (optimize) {
+      InlineVisitor inl;
+      inl.Inline(program);
+
+      FoldVisitor fold;
+      fold.Fold(program);
+
+      SethiVisitor sethi;
+      sethi.Sethi(program);
     }
 
     // ---- Generar salida según modo ----
