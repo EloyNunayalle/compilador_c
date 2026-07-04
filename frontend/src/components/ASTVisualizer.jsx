@@ -158,56 +158,14 @@ export default function ASTVisualizer({ ast, loading = false }) {
         const label = getNodeLabel(d)
         const pad = 6
         const availW = NODE_RADIUS * 2 - pad * 2
-        const availH = NODE_RADIUS * 2 - pad * 2
-
-        // separar parte fija (tipo) de parte variable (valor)
-        const sp = label.indexOf(' ')
-        const typePart = sp >= 0 ? label.slice(0, sp) : label
-        const valuePart = sp >= 0 ? label.slice(sp + 1) : ''
-
-        let fontSize
-        let lines = []
-
-        for (fontSize = 10; fontSize >= 4; fontSize -= 0.5) {
-          const cw = fontSize * 0.6
-          if (typePart.length * cw > availW) continue
-
-          const maxCpl = Math.max(1, Math.floor(availW / cw))
-
-          if (label.length <= maxCpl) {
-            lines = [label]
-            break
-          }
-
-          if (!valuePart) {
-            lines = [typePart]
-            break
-          }
-
-          const valLines = []
-          for (let i = 0; i < valuePart.length; i += maxCpl)
-            valLines.push(valuePart.slice(i, i + maxCpl))
-          lines = [typePart, ...valLines]
-
-          if (lines.length * fontSize * 1.3 <= availH) break
+        let fontSize = 10
+        for (; fontSize >= 4; fontSize -= 0.5) {
+          if (label.length * fontSize * 0.6 <= availW) break
         }
-
-        if (!lines.length) {
-          fontSize = Math.max(4, fontSize)
-          lines = [typePart]
-        }
-
-        const el = d3.select(this)
-        lines.forEach((line, idx) => {
-          const dy = idx === 0
-            ? -(lines.length * fontSize * 1.3) / 2 + fontSize * 0.65 + 'px'
-            : fontSize * 1.3 + 'px'
-          el.append('tspan')
-            .attr('x', 0)
-            .attr('dy', dy)
-            .attr('font-size', fontSize + 'px')
-            .text(line)
-        })
+        d3.select(this)
+          .attr('font-size', fontSize + 'px')
+          .attr('dy', '0.35em')
+          .text(label)
       })
 
     const zoom_handler = d3.zoom()
